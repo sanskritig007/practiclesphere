@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Particle Sphere</title>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: #0a0a0f;
+    overflow: hidden;
+    width: 100vw;
+    height: 100vh;
+    font-family: Georgia, 'Times New Roman', serif;
+  }
+
+  #webcam-bg {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    opacity: 0;
+    transition: opacity 0.6s ease;
+    transform: scaleX(-1);
+    z-index: 0;
+    pointer-events: none;
+  }
+  #webcam-bg.visible { opacity: 0.28; }
+
+  canvas#main {
+    position: fixed;
+    inset: 0;
+    z-index: 1;
+  }
+
+  #ui {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    z-index: 10;
+    pointer-events: none;
+    padding: 24px 28px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+  }
+
+  #title-block h1 {
+    font-size: 22px;
+    font-weight: 400;
+    color: rgba(255,255,255,0.88);
+    letter-spacing: 0.01em;
+    line-height: 1.2;
+  }
+  #title-block p {
+    font-size: 12px;
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+    color: rgba(255,255,255,0.32);
+    margin-top: 4px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  #controls {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 10px;
+    pointer-events: all;
+  }
+
+  #webcam-btn {
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.14);
+    color: rgba(255,255,255,0.7);
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 8px 16px;
+    border-radius: 20px;
+    cursor: pointer;
+    transition: background 0.2s, border-color 0.2s, color 0.2s;
+  }
+  #webcam-btn:hover {
+    background: rgba(255,255,255,0.12);
+    border-color: rgba(255,255,255,0.28);
+    color: rgba(255,255,255,0.95);
+  }
+  #webcam-btn.active {
+    background: rgba(140,100,255,0.18);
+    border-color: rgba(140,100,255,0.5);
+    color: rgba(180,140,255,0.95);
+  }
+
+  #status-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: #444;
+    display: inline-block;
+    margin-right: 6px;
+    transition: background 0.3s;
+  }
+  #status-dot.active { background: #7fff7f; box-shadow: 0 0 6px #7fff7f; }
+
+  #hints {
+    position: fixed;
+    bottom: 28px;
+    left: 28px;
+    z-index: 10;
+    pointer-events: none;
+  }
+  #hints p {
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+    font-size: 11px;
+    color: rgba(255,255,255,0.22);
+    letter-spacing: 0.05em;
+    line-height: 1.8;
+    text-transform: uppercase;
+  }
+
+  #charge-ring-wrap {
+    position: fixed;
+    bottom: 28px;
+    right: 28px;
+    z-index: 10;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.2s;
+  }
+  #charge-ring-wrap.visible { opacity: 1; }
+  #charge-ring-wrap canvas {
+    display: block;
+  }
+  #charge-label {
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+    font-size: 10px;
+    color: rgba(255,255,255,0.4);
+    text-align: center;
+    margin-top: 4px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+</style>
+</head>
+<body>
+
+<video id="webcam-bg" autoplay muted playsinline></video>
+<canvas id="main"></canvas>
+
+<div id="ui">
+  <div id="title-block">
+    <h1>Particle Sphere</h1>
+    <p><span id="status-dot"></span>Hand tracking</p>
+  </div>
+  <div id="controls">
+    <button id="webcam-btn">Webcam View</button>
+  </div>
+</div>
+
+<div id="hints">
+  <p>One hand — move &amp; rotate sphere</p>
+  <p>Pinch &amp; hold — charge, release — explode</p>
+  <p>Two hands — spread to grow, pinch to shrink</p>
+  <p>Fingers up — change colour</p>
+</div>
+
+<div id="charge-ring-wrap" id="charge-wrap">
+  <canvas id="charge-canvas" width="72" height="72"></canvas>
+  <div id="charge-label">Charge</div>
+</div>
+
+<script>
+(function() {
+  const canvas = document.getElementById('main');
+  const ctx = canvas.getContext('2d');
+  const webcamVideo = document.getElementById('webcam-bg');
+  const webcamBtn = document.getElementById('webcam-btn');
+  const statusDot = document.getElementById('status-dot');
+  const chargeWrap = document.getElementById('charge-ring-wrap');
+  const chargeCanvas = document.getElementById('charge-canvas');
+  const chargeCtx = chargeCanvas.getContext('2d');
+
+  let W = window.innerWidth, H = window.innerHeight;
+  canvas.width = W; canvas.height = H;
+
+  window.addEventListener('resize', () => {
+    W = window.innerWidth; H = window.innerHeight;
+    canvas.width = W; canvas.height = H;
+  });
+
+  const NUM = 3000;
+
+  const state = {
+    sphereX: W / 2,
+    sphereY: H / 2,
+    targetX: W / 2,
+    targetY: H / 2,
+    rotX: 0, rotY: 0,
+    targetRotX: 0, targetRotY: 0,
+    radius: 160,
+    targetRadius: 160,
+    chargeLevel: 0,
+    isCharging: false,
+    exploded: false,
+    reforming: false,
+    fingerCount: 0,
+    colorIndex: 0,
+    webcamActive: false,
+    handDetected: false,
+  };
+
+  const COLORS = [
+    [[120,80,255],[180,120,255]],
+    [[255,80,140],[255,150,80]],
+    [[60,220,180],[60,160,255]],
+    [[255,200,60],[255,120,60]],
+    [[140,255,100],[60,220,140]],
+  ];
+
+  let colorT = 0;
+  let currentColorIdx = 0;
+  let nextColorIdx = 0;
+  let colorBlend = 1;
+
+  function lerpColor(c1, c2, t) {
+    return [
+      Math.round(c1[0] + (c2[0]-c1[0])*t),
+      Math.round(c1[1] + (c2[1]-c1[1])*t),
+      Math.round(c1[2] + (c2[2]-c1[2])*t),
+    ];
+  }
+  function getParticleColor(i, t) {
+    const cc = COLORS[currentColorIdx];
+    const nc = COLORS[nextColorIdx];
+    const mix = colorBlend;
+    const baseC = [
+      lerpColor(cc[0], nc[0], mix),
+      lerpColor(cc[1], nc[1], mix),
+    ];
+    const frac = i / NUM;
+    return lerpColor(baseC[0], baseC[1], frac);
+  }
+
+  function setColorIndex(idx) {
+    idx = idx % COLORS.length;
+    if (idx !== nextColorIdx) {
+      currentColorIdx = nextColorIdx;
+      nextColorIdx = idx;
+      colorBlend = 0;
+    }
+  }
+
+  const particles = [];
+
+  function spherePoint(i, total, r) {
+    const phi = Math.acos(1 - 2*(i+0.5)/total);
+    const theta = Math.PI * (1 + Math.sqrt(5)) * i;
+    return {
+      x: r * Math.sin(phi) * Math.cos(theta),
+      y: r * Math.sin(phi) * Math.sin(theta),
+      z: r * Math.cos(phi),
+    };
+  }
+
+  function initParticles() {
+    for (let i = 0; i < NUM; i++) {
+      const sp = spherePoint(i, NUM, state.radius);
+      particles.push({
+        x: sp.x, y: sp.y, z: sp.z,
+        tx: sp.x, ty: sp.y, tz: sp.z,
+        vx: 0, vy: 0, vz: 0,
+        exploding: false,
+        size: 1.2 + Math.random() * 0.8,
+      });
+    }
+  }
+  initParticles();
+
+  function updateTargets() {
+    const r = state.targetRadius;
+    for (let i = 0; i < NUM; i++) {
+      const sp = spherePoint(i, NUM, r);
+      particles[i].tx = sp.x;
+      particles[i].ty = sp.y;
+      particles[i].tz = sp.z;
+    }
+  }
+
+  function explode() {
+    state.exploded = true;
+    state.isCharging = false;
+    state.chargeLevel = 0;
+    const power = 18 + Math.random() * 8;
+    for (let i = 0; i < NUM; i++) {
+      const p = particles[i];
+      const len = Math.sqrt(p.x*p.x + p.y*p.y + p.z*p.z) || 1;
+      const burst = power * (0.5 + Math.random());
+      p.vx = (p.x/len) * burst + (Math.random()-0.5)*6;
+      p.vy = (p.y/len) * burst + (Math.random()-0.5)*6;
+      p.vz = (p.z/len) * burst + (Math.random()-0.5)*6;
+      p.exploding = true;
+    }
+    setTimeout(() => {
+      state.exploded = false;
+      state.reforming = true;
+      for (let i = 0; i < NUM; i++) {
+        particles[i].exploding = false;
+      }
+      setTimeout(() => { state.reforming = false; }, 1200);
+    }, 900);
+  }
+
+  function rotate3D(x, y, z, rx, ry) {
+    let nx = x, ny = y, nz = z;
+    const cosX = Math.cos(rx), sinX = Math.sin(rx);
+    let tmp = ny * cosX - nz * sinX;
+    nz = ny * sinX + nz * cosX;
+    ny = tmp;
+    const cosY = Math.cos(ry), sinY = Math.sin(ry);
+    tmp = nx * cosY + nz * sinY;
+    nz = -nx * sinY + nz * cosY;
+    nx = tmp;
+    return { x: nx, y: ny, z: nz };
+  }
+
+  function drawChargeRing(level) {
+    const cx = 36, cy = 36, r = 28;
+    chargeCtx.clearRect(0, 0, 72, 72);
+    chargeCtx.beginPath();
+    chargeCtx.arc(cx, cy, r, 0, Math.PI*2);
+    chargeCtx.strokeStyle = 'rgba(255,255,255,0.08)';
+    chargeCtx.lineWidth = 3;
+    chargeCtx.stroke();
+    if (level > 0) {
+      const end = -Math.PI/2 + Math.PI*2*level;
+      chargeCtx.beginPath();
+      chargeCtx.arc(cx, cy, r, -Math.PI/2, end);
+      const hue = 260 + level * 80;
+      chargeCtx.strokeStyle = `hsl(${hue},90%,${60+level*20}%)`;
+      chargeCtx.lineWidth = 3;
+      chargeCtx.lineCap = 'round';
+      chargeCtx.stroke();
+    }
+    chargeCtx.beginPath();
+    chargeCtx.arc(cx, cy, 4, 0, Math.PI*2);
+    chargeCtx.fillStyle = `rgba(255,255,255,${0.15 + level*0.6})`;
+    chargeCtx.fill();
+  }
+
+  let lastT = 0;
+  function animate(t) {
+    requestAnimationFrame(animate);
+    const dt = Math.min((t - lastT) / 16, 3);
+    lastT = t;
+
+    if (colorBlend < 1) colorBlend = Math.min(1, colorBlend + 0.04 * dt);
+
+    const ease = 0.06 * dt;
+    state.sphereX += (state.targetX - state.sphereX) * ease;
+    state.sphereY += (state.targetY - state.sphereY) * ease;
+    state.rotX += (state.targetRotX - state.rotX) * ease * 0.7;
+    state.rotY += (state.targetRotY - state.rotY) * ease * 0.7;
+    state.radius += (state.targetRadius - state.radius) * ease * 0.8;
+
+    if (!state.exploded && !state.reforming) {
+      state.rotY += 0.003 * dt;
+    }
+
+    ctx.clearRect(0, 0, W, H);
+
+    const sorted = [];
+    for (let i = 0; i < NUM; i++) {
+      const p = particles[i];
+      if (p.exploding) {
+        p.x += p.vx * 0.9 * dt;
+        p.y += p.vy * 0.9 * dt;
+        p.z += p.vz * 0.9 * dt;
+        p.vx *= 0.92;
+        p.vy *= 0.92;
+        p.vz *= 0.92;
+      } else {
+        const sp = 0.04 * dt;
+        p.x += (p.tx - p.x) * sp;
+        p.y += (p.ty - p.y) * sp;
+        p.z += (p.tz - p.z) * sp;
+      }
+
+      const rot = rotate3D(p.x, p.y, p.z, state.rotX, state.rotY);
+      const fov = 600;
+      const scale = fov / (fov + rot.z + 300);
+      const sx = state.sphereX + rot.x * scale;
+      const sy = state.sphereY + rot.y * scale;
+      sorted.push({ i, sx, sy, z: rot.z, scale });
+    }
+
+    sorted.sort((a, b) => a.z - b.z);
+
+    for (const { i, sx, sy, scale } of sorted) {
+      const col = getParticleColor(i, colorT);
+      const alpha = 0.3 + scale * 0.7;
+      const sz = particles[i].size * scale;
+      ctx.beginPath();
+      ctx.arc(sx, sy, Math.max(0.4, sz), 0, Math.PI*2);
+      ctx.fillStyle = `rgba(${col[0]},${col[1]},${col[2]},${alpha.toFixed(2)})`;
+      ctx.fill();
+    }
+
+    if (state.isCharging) {
+      chargeWrap.classList.add('visible');
+      drawChargeRing(state.chargeLevel);
+    } else {
+      chargeWrap.classList.remove('visible');
+    }
+  }
+
+  requestAnimationFrame(animate);
+
+  let handsReady = false;
+  let handsInstance = null;
+  let cameraInstance = null;
+
+  function startHandTracking() {
+    if (handsInstance) return;
+
+    handsInstance = new Hands({
+      locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`
+    });
+
+    handsInstance.setOptions({
+      maxNumHands: 2,
+      modelComplexity: 1,
+      minDetectionConfidence: 0.7,
+      minTrackingConfidence: 0.6,
+    });
+
+    handsInstance.onResults(onHandResults);
+
+    const vid = document.createElement('video');
+    vid.setAttribute('autoplay', '');
+    vid.setAttribute('muted', '');
+    vid.setAttribute('playsinline', '');
+    vid.style.display = 'none';
+    document.body.appendChild(vid);
+
+    cameraInstance = new Camera(vid, {
+      onFrame: async () => {
+        await handsInstance.send({ image: vid });
+      },
+      width: 640,
+      height: 480,
+    });
+
+    cameraInstance.start().then(() => {
+      webcamVideo.srcObject = vid.srcObject;
+      statusDot.classList.add('active');
+      handsReady = true;
+    }).catch(err => {
+      console.warn('Camera error:', err);
+    });
+  }
+
+  let pinchStartTime = 0;
+  let prevTwoHandDist = null;
+
+  function countFingers(landmarks) {
+    let count = 0;
+    const tips = [8, 12, 16, 20];
+    const mids = [6, 10, 14, 18];
+    for (let j = 0; j < 4; j++) {
+      if (landmarks[tips[j]].y < landmarks[mids[j]].y) count++;
+    }
+    if (landmarks[4].x < landmarks[3].x) count++;
+    return count;
+  }
+
+  function pinchDist(lm) {
+    const t = lm[4], i = lm[8];
+    const dx = t.x - i.x, dy = t.y - i.y;
+    return Math.sqrt(dx*dx + dy*dy);
+  }
+
+  function onHandResults(results) {
+    if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
+      state.handDetected = false;
+      state.isCharging = false;
+      prevTwoHandDist = null;
+      return;
+    }
+
+    state.handDetected = true;
+    const hands = results.multiHandLandmarks;
+
+    if (hands.length === 1) {
+      const lm = hands[0];
+      const wrist = lm[0];
+
+      state.targetX = (1 - wrist.x) * W;
+      state.targetY = wrist.y * H;
+
+      const dx = (0.5 - wrist.x) * 2;
+      const dy = (0.5 - wrist.y) * 2;
+      state.targetRotY += dx * 0.03;
+      state.targetRotX -= dy * 0.02;
+
+      const fingers = countFingers(lm);
+      const fc = Math.max(0, Math.min(4, fingers));
+      if (fc !== state.fingerCount) {
+        state.fingerCount = fc;
+        setColorIndex(fc);
+      }
+
+      const pd = pinchDist(lm);
+      const isPinching = pd < 0.055;
+
+      if (isPinching && !state.exploded) {
+        if (!state.isCharging) {
+          state.isCharging = true;
+          pinchStartTime = performance.now();
+          state.chargeLevel = 0;
+        } else {
+          const elapsed = performance.now() - pinchStartTime;
+          state.chargeLevel = Math.min(1, elapsed / 1800);
+        }
+      } else if (!isPinching && state.isCharging) {
+        if (state.chargeLevel > 0.15) {
+          explode();
+        }
+        state.isCharging = false;
+        state.chargeLevel = 0;
+      }
+
+      prevTwoHandDist = null;
+
+    } else if (hands.length >= 2) {
+      state.isCharging = false;
+      state.chargeLevel = 0;
+
+      const lm0 = hands[0], lm1 = hands[1];
+      const w0 = lm0[0], w1 = lm1[0];
+      const mx = ((1-w0.x) + (1-w1.x)) / 2 * W;
+      const my = (w0.y + w1.y) / 2 * H;
+      state.targetX = mx;
+      state.targetY = my;
+
+      const dx = (1-w0.x) - (1-w1.x);
+      const dy = w0.y - w1.y;
+      const dist = Math.sqrt(dx*dx + dy*dy);
+
+      if (prevTwoHandDist !== null) {
+        const delta = dist - prevTwoHandDist;
+        state.targetRadius = Math.max(60, Math.min(380, state.targetRadius + delta * W * 2.5));
+        updateTargets();
+      }
+      prevTwoHandDist = dist;
+    }
+  }
+
+  webcamBtn.addEventListener('click', () => {
+    state.webcamActive = !state.webcamActive;
+    if (state.webcamActive) {
+      webcamVideo.classList.add('visible');
+      webcamBtn.classList.add('active');
+      webcamBtn.textContent = 'Hide Webcam';
+    } else {
+      webcamVideo.classList.remove('visible');
+      webcamBtn.classList.remove('active');
+      webcamBtn.textContent = 'Webcam View';
+    }
+  });
+
+  startHandTracking();
+
+  updateTargets();
+})();
+</script>
+</body>
+</html>
