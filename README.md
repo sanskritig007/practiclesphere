@@ -23,7 +23,6 @@ This project features a robust physics engine and AI tracking to translate physi
 - **Clean UI:** A minimalist, dark-themed aesthetic prioritizing performance and visual impact.
 
 ## 🚀 Live Demo
-*(If you have enabled GitHub pages, your live site will be available here)*:
 **[View Live Demo](https://sanskritig007.github.io/practiclesphere/)**
 
 ## 🛠️ Tech Stack
