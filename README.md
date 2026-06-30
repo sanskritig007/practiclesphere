@@ -54,8 +54,6 @@ Because this project uses the webcam (which requires a secure context or `localh
 ## 🤝 Contributing
 Contributions, issues, and feature requests are very welcome! Feel free to check the [issues page](https://github.com/sanskritig007/practiclesphere/issues) to report a bug or suggest a feature.
 
-## 📄 License
-This project is open-source and available under the [MIT License](LICENSE).
 
 ---
-*Built with ❤️ exploring the intersection of AI, Physics, and Web Graphics.*
+*Built with ❤️ exploring the intersection of AI, Physics, and Web Graphics.* ✨
